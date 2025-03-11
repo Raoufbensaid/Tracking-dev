@@ -1,0 +1,31 @@
+# === IGNORER LES FICHIERS COMMUNS À TOUS LES PROJETS NODE.JS ===
+node_modules/          # Bibliothèques installées via npm/yarn
+npm-debug.log*         # Logs des erreurs npm
+yarn-debug.log*
+yarn-error.log*
+*.log                  # Tous les fichiers logs
+
+# === IGNORER LES FICHIERS DU FRONTEND (React Native, Expo) ===
+frontend/.expo/        # Dossier Expo (peut contenir des fichiers temporaires)
+frontend/.expo-shared/
+frontend/build/        # Dossier de build si vous compilez votre app
+frontend/.DS_Store     # Fichier inutile (MacOS)
+frontend/.vscode/      # Configuration locale de VS Code
+frontend/ios/          # Si généré par Expo eject
+frontend/android/      # Si généré par Expo eject
+
+# === IGNORER LES FICHIERS DU BACKEND (Node.js, NestJS) ===
+backend/dist/          # Fichiers compilés (NestJS)
+backend/build/         # Fichiers de build
+backend/.env           # Fichier d'environnement (contient des clés API)
+backend/.DS_Store      # Fichier inutile (MacOS)
+backend/.vscode/       # Configuration locale de VS Code
+
+# === IGNORER LES FICHIERS TEMPORAIRES & SYSTÈME ===
+*.swp                  # Fichiers temporaires de Vim
+*.swo
+*.bak                  # Fichiers de sauvegarde
+*.tmp                  # Fichiers temporaires
+.DS_Store              # Fichier système MacOS
+Thumbs.db              # Fichier système Windows
+.idea/                 # Fichier de configuration WebStorm
