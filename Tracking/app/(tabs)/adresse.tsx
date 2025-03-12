@@ -128,7 +128,7 @@ export default function AdresseScreen() {
 
       // Naviguer vers la page addressMap en passant les adresses en paramètre
       router.push({
-        pathname: "/addressMap",
+        pathname: "/AddressMapGoogle",
         params: { addresses: JSON.stringify(addresses) },
       });
     } catch (error) {
