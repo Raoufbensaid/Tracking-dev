@@ -9,6 +9,7 @@ import {
   Modal,
   useWindowDimensions,
   Alert,
+  Button,
   Linking,
 } from "react-native";
 import { WebView } from "react-native-webview";
@@ -17,9 +18,8 @@ import { useRouter, useLocalSearchParams } from "expo-router";
 const GOOGLE_API_KEY = "AIzaSyCDz7ffM0xAeZ-FK0gs5aep5NWy9fk7eYw"; // Remplacez par votre clé API Google Maps
 
 /**
- * Génère un document HTML optimisé pour mobile, qui utilise l'API Google Maps JavaScript.
- * Le code active le contrôle de rotation et définit la gestion des gestes pour permettre la rotation.
- * Chaque marqueur affiche une InfoWindow avec l'adresse complète, le nombre de logements et un lien pour obtenir l'itinéraire.
+ * Génère le code HTML complet qui intègre une carte Google Maps avec des marqueurs.
+ * Si withOrdering est true, chaque marker affiche son numéro d'ordre.
  */
 function generateHTML(
   addresses: {
@@ -27,8 +27,11 @@ function generateHTML(
     longitude: number;
     addressComplete: string;
     nbLogements: string;
-  }[]
+    order?: number;
+  }[],
+  withOrdering: boolean = false
 ): string {
+  // Création du tableau JS des marqueurs avec label si ordering
   const markersJS = addresses
     .map((addr) => {
       const directionsLink = `https://www.google.com/maps/dir/?api=1&destination=${addr.latitude},${addr.longitude}`;
@@ -39,9 +42,14 @@ function generateHTML(
           <a target="_blank" href="${directionsLink}">Obtenir itinéraire</a>
         </div>
       `;
+      const label =
+        withOrdering && addr.order
+          ? `, label: { text: "${addr.order}", color: "white", fontSize: "16px", fontWeight: "bold" }`
+          : "";
       return `{
         position: { lat: ${addr.latitude}, lng: ${addr.longitude} },
         infoContent: \`${infoContent}\`
+        ${label}
       }`;
     })
     .join(",\n");
@@ -65,11 +73,11 @@ function generateHTML(
               zoom: 12,
               center: center,
               mapTypeId: 'roadmap',
-              rotateControl: true,        // Affiche le bouton de rotation
-              gestureHandling: 'greedy'    // Permet de réagir aux gestes de l'utilisateur
+              rotateControl: true,
+              gestureHandling: 'greedy'
             });
             
-            // Icône personnalisée pour agrandir les marqueurs à 60x60 pixels
+            // Icône personnalisée fixe pour les marqueurs (60x60 pixels)
             var icon = {
               url: "http://maps.google.com/mapfiles/ms/icons/red-dot.png",
               scaledSize: new google.maps.Size(60, 60)
@@ -77,16 +85,18 @@ function generateHTML(
 
             var markers = [${markersJS}];
             markers.forEach(function(markerData) {
-              var marker = new google.maps.Marker({
+              var markerOptions = {
                 position: markerData.position,
                 map: map,
                 icon: icon
-              });
-              
+              };
+              if (markerData.label) {
+                markerOptions.label = markerData.label;
+              }
+              var marker = new google.maps.Marker(markerOptions);
               var infowindow = new google.maps.InfoWindow({
                 content: markerData.infoContent
               });
-              
               marker.addListener('click', function() {
                 infowindow.open(map, marker);
               });
@@ -101,14 +111,57 @@ function generateHTML(
   `;
 }
 
+/**
+ * Trie un tableau d'adresses selon l'algorithme du plus proche voisin.
+ */
+function computeOptimalOrder(
+  addresses: {
+    latitude: number;
+    longitude: number;
+    addressComplete: string;
+    nbLogements: string;
+  }[]
+): {
+  latitude: number;
+  longitude: number;
+  addressComplete: string;
+  nbLogements: string;
+  order: number;
+}[] {
+  if (addresses.length < 2)
+    return addresses.map((a, i) => ({ ...a, order: i + 1 }));
+  const sorted: typeof addresses = [];
+  const remaining = [...addresses];
+  // Commencer par le premier élément
+  sorted.push(remaining.shift()!);
+  while (remaining.length > 0) {
+    const last = sorted[sorted.length - 1];
+    let nearestIndex = 0;
+    let nearestDistance = Infinity;
+    remaining.forEach((pt, index) => {
+      const dLat = pt.latitude - last.latitude;
+      const dLng = pt.longitude - last.longitude;
+      const distance = dLat * dLat + dLng * dLng; // distance au carré
+      if (distance < nearestDistance) {
+        nearestDistance = distance;
+        nearestIndex = index;
+      }
+    });
+    sorted.push(remaining.splice(nearestIndex, 1)[0]);
+  }
+  // Assigner un numéro d'ordre
+  return sorted.map((pt, i) => ({ ...pt, order: i + 1 }));
+}
+
 export default function AddressMapGoogleScreen() {
   const router = useRouter();
   const params = useLocalSearchParams();
   const { width, height } = useWindowDimensions();
-  const headerHeight = 60; // Hauteur approximative de l'en-tête
+  const headerHeight = 60; // Hauteur de l'en-tête
 
   console.log("Paramètres reçus:", params);
 
+  // Extraction du paramètre "addresses"
   const addressesParam = params.addresses as string | undefined;
 
   const [addresses, setAddresses] = useState<
@@ -117,24 +170,20 @@ export default function AddressMapGoogleScreen() {
       longitude: number;
       addressComplete: string;
       nbLogements: string;
+      order?: number;
     }[]
   >([]);
   const [loading, setLoading] = useState(true);
   const [htmlContent, setHtmlContent] = useState("");
-  const [modalVisible, setModalVisible] = useState(false);
-  const [selectedAddress, setSelectedAddress] = useState<{
-    addressComplete: string;
-    nbLogements: string;
-  } | null>(null);
+  const [withOrdering, setWithOrdering] = useState(false);
 
+  // Lorsque les adresses sont reçues, on les charge
   useEffect(() => {
     if (addressesParam) {
       try {
         const parsed = JSON.parse(addressesParam);
         console.log("Adresses parsées:", parsed);
         setAddresses(parsed);
-        const html = generateHTML(parsed);
-        setHtmlContent(html);
       } catch (error) {
         console.error("Erreur lors du parsing des adresses:", error);
       }
@@ -144,11 +193,39 @@ export default function AddressMapGoogleScreen() {
     setLoading(false);
   }, [addressesParam]);
 
+  // Tri optimal et mise à jour du HTML
+  const handleComputeOrder = () => {
+    console.log("Bouton 'Obtenir l'itinéraire' pressé");
+    const sorted = computeOptimalOrder(addresses);
+    console.log("Adresses triées:", sorted);
+    setAddresses(sorted);
+    setWithOrdering(true);
+  };
+
+  // Régénérer le HTML lorsque les adresses ou l'option ordering changent
+  useEffect(() => {
+    if (addresses.length > 0) {
+      const html = generateHTML(addresses, withOrdering);
+      setHtmlContent(html);
+    }
+  }, [addresses, withOrdering]);
+
   if (loading || !htmlContent) {
     return (
       <View style={styles.loadingContainer}>
         <ActivityIndicator size="large" color="#2196F3" />
         <Text>Chargement...</Text>
+      </View>
+    );
+  }
+  if (addresses.length === 0) {
+    console.log("Aucune adresse disponible.");
+    return (
+      <View style={styles.loadingContainer}>
+        <Text>Aucune adresse trouvée.</Text>
+        <TouchableOpacity onPress={() => router.back()}>
+          <Text style={styles.backText}>Retour</Text>
+        </TouchableOpacity>
       </View>
     );
   }
@@ -169,47 +246,20 @@ export default function AddressMapGoogleScreen() {
         <View style={{ width: 60 }} />
       </View>
 
-      {/* WebView affichant la carte Google Maps en mode mobile */}
+      {/* Bouton pour obtenir l'itinéraire (tri optimal) */}
+      {!withOrdering && (
+        <View style={styles.routeButtonContainer}>
+          <Button title="Obtenir l'itinéraire" onPress={handleComputeOrder} />
+        </View>
+      )}
+
+      {/* WebView affichant la carte Google Maps responsive */}
       <WebView
+        key={withOrdering ? "ordered" : "unordered"}
         originWhitelist={["*"]}
         source={{ html: htmlContent }}
-        style={{ width, height: height - headerHeight }}
+        style={{ width: width, height: height - headerHeight - 50 }}
       />
-
-      {/* Modal pour afficher les détails d'une adresse (si nécessaire) */}
-      <Modal
-        animationType="slide"
-        transparent={true}
-        visible={modalVisible}
-        onRequestClose={() => {
-          console.log("Modal fermée");
-          setModalVisible(false);
-        }}
-      >
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
-            {selectedAddress && (
-              <>
-                <Text style={styles.modalTitle}>
-                  {selectedAddress.addressComplete}
-                </Text>
-                <Text style={styles.modalSubtitle}>
-                  Nb logements: {selectedAddress.nbLogements}
-                </Text>
-              </>
-            )}
-            <TouchableOpacity
-              style={styles.modalButton}
-              onPress={() => {
-                console.log("Bouton Fermer pressé");
-                setModalVisible(false);
-              }}
-            >
-              <Text style={styles.modalButtonText}>Fermer</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
     </View>
   );
 }
@@ -228,31 +278,9 @@ const styles = StyleSheet.create({
   backText: { color: "#fff", fontSize: 16 },
   headerTitle: { color: "#fff", fontSize: 18, fontWeight: "bold" },
   loadingContainer: { flex: 1, justifyContent: "center", alignItems: "center" },
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: "rgba(0,0,0,0.5)",
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  modalContent: {
-    width: "80%",
+  routeButtonContainer: {
+    padding: 8,
     backgroundColor: "#fff",
-    padding: 20,
-    borderRadius: 10,
     alignItems: "center",
   },
-  modalTitle: {
-    fontSize: 16,
-    fontWeight: "bold",
-    textDecorationLine: "underline",
-    marginBottom: 10,
-  },
-  modalSubtitle: { fontSize: 14, marginBottom: 20 },
-  modalButton: {
-    backgroundColor: "#2196F3",
-    paddingHorizontal: 20,
-    paddingVertical: 10,
-    borderRadius: 5,
-  },
-  modalButtonText: { color: "#fff", fontSize: 16 },
 });
